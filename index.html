@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#e9547a" />
+  <title>달의 기록 · 생리주기 관리</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/favicon.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>🌙 달의 기록</h1>
+    <span id="sync-badge" class="badge hidden" title="구글 캘린더 연동됨">📅</span>
+  </header>
+
+  <main id="app">
+    <!-- ===== 달력 탭 ===== -->
+    <section id="tab-calendar" class="tab">
+      <div class="cal-head">
+        <button id="cal-prev" class="icon-btn" aria-label="이전 달">‹</button>
+        <h2 id="cal-title">2026년 7월</h2>
+        <button id="cal-next" class="icon-btn" aria-label="다음 달">›</button>
+      </div>
+      <div class="cal-weekdays">
+        <span class="sun">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="sat">토</span>
+      </div>
+      <div id="cal-grid" class="cal-grid"></div>
+
+      <div class="legend">
+        <span><i class="dot period-start"></i> 시작일</span>
+        <span><i class="dot period"></i> 생리 기간</span>
+        <span><i class="dot predicted"></i> 예정일</span>
+        <span><i class="dot fertile"></i> 가임기(추정)</span>
+      </div>
+
+      <div class="quick">
+        <button id="btn-log-today" class="primary big">오늘 생리 시작 기록</button>
+        <button id="btn-end-today" class="ghost big">오늘 종료로 기록</button>
+      </div>
+      <p class="hint">날짜를 탭하면 시작·종료·삭제를 고를 수 있어요.</p>
+    </section>
+
+    <!-- ===== 대시보드 탭 ===== -->
+    <section id="tab-dashboard" class="tab hidden">
+      <div class="cards">
+        <div class="card highlight">
+          <span class="label">다음 생리 예정일</span>
+          <strong id="d-next" class="value">-</strong>
+          <span id="d-next-sub" class="sub"></span>
+        </div>
+        <div class="card">
+          <span class="label">마지막 생리 시작일</span>
+          <strong id="d-last" class="value">-</strong>
+          <span id="d-last-sub" class="sub"></span>
+        </div>
+        <div class="card">
+          <span class="label">평균 주기</span>
+          <strong id="d-cycle" class="value">-</strong>
+          <span class="sub">시작일 사이 간격</span>
+        </div>
+        <div class="card">
+          <span class="label">평균 생리 기간</span>
+          <strong id="d-duration" class="value">-</strong>
+          <span class="sub">시작~종료</span>
+        </div>
+      </div>
+
+      <div class="card wide">
+        <span class="label">주기 변동</span>
+        <div id="cycle-bars" class="bars"></div>
+        <span id="cycle-range" class="sub"></span>
+      </div>
+
+      <div class="card wide">
+        <span class="label">최근 기록</span>
+        <ul id="history" class="history"></ul>
+      </div>
+    </section>
+
+    <!-- ===== 설정 탭 ===== -->
+    <section id="tab-settings" class="tab hidden">
+      <div class="card wide">
+        <span class="label">알림 (구글 캘린더)</span>
+        <p class="sub">
+          예정일 <b>2일 전</b>과 <b>당일 확인</b> 알림을 내 구글 캘린더에 자동 등록합니다.
+          앱을 켜지 않아도 캘린더가 알림을 띄워줘요.
+        </p>
+        <label class="field">
+          <span>구글 OAuth 클라이언트 ID</span>
+          <input id="s-client-id" type="text" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" />
+        </label>
+        <label class="field row">
+          <span>알림 시각</span>
+          <input id="s-remind-hour" type="number" min="0" max="23" value="9" /> <span class="sub">시</span>
+        </label>
+        <div class="btn-row">
+          <button id="btn-gcal-connect" class="primary">구글 캘린더 연동 & 동기화</button>
+          <button id="btn-gcal-off" class="ghost">연동 해제</button>
+        </div>
+        <p id="gcal-status" class="sub"></p>
+        <details class="help">
+          <summary>클라이언트 ID 만드는 법 (1회, 약 5분)</summary>
+          <ol>
+            <li>console.cloud.google.com 접속 → 프로젝트 생성</li>
+            <li>“API 및 서비스 → 라이브러리”에서 <b>Google Calendar API</b> 사용 설정</li>
+            <li>“OAuth 동의 화면” 구성(외부, 본인 이메일을 테스트 사용자로 추가)</li>
+            <li>“사용자 인증 정보 → OAuth 클라이언트 ID → 웹 애플리케이션”</li>
+            <li><b>승인된 자바스크립트 원본</b>에 이 앱 주소 추가<br>(예: <span id="s-origin" class="mono"></span>)</li>
+            <li>생성된 클라이언트 ID를 위 칸에 붙여넣기</li>
+          </ol>
+        </details>
+      </div>
+
+      <div class="card wide">
+        <span class="label">주기 설정</span>
+        <label class="field row">
+          <span>기본 주기 (데이터 부족 시)</span>
+          <input id="s-default-cycle" type="number" min="15" max="60" value="28" /> <span class="sub">일</span>
+        </label>
+        <label class="field row">
+          <span>평균 계산에 쓸 최근 주기 수</span>
+          <input id="s-window" type="number" min="2" max="24" value="6" /> <span class="sub">개</span>
+        </label>
+        <button id="btn-save-settings" class="primary">저장</button>
+      </div>
+
+      <div class="card wide">
+        <span class="label">데이터 백업</span>
+        <p class="sub">기록은 이 기기에만 저장됩니다. 기기를 바꾸거나 초기화 전 꼭 백업하세요.</p>
+        <div class="btn-row">
+          <button id="btn-export" class="primary">백업 파일 내보내기</button>
+          <button id="btn-import" class="ghost">백업 불러오기</button>
+          <input id="import-file" type="file" accept="application/json" hidden />
+        </div>
+        <button id="btn-reset" class="danger">모든 데이터 삭제</button>
+      </div>
+
+      <p class="version">달의 기록 · 로컬 저장 · 광고 없음</p>
+    </section>
+  </main>
+
+  <!-- 하단 탭바 -->
+  <nav class="tabbar">
+    <button data-tab="calendar" class="active">📅<span>달력</span></button>
+    <button data-tab="dashboard">📊<span>현황</span></button>
+    <button data-tab="settings">⚙️<span>설정</span></button>
+  </nav>
+
+  <!-- 날짜 액션 시트 -->
+  <div id="sheet" class="sheet hidden">
+    <div class="sheet-bg"></div>
+    <div class="sheet-body">
+      <h3 id="sheet-date">날짜</h3>
+      <button id="sheet-start" class="sheet-btn">🩸 생리 시작일로 표시</button>
+      <button id="sheet-end" class="sheet-btn">✔️ 생리 종료일로 표시</button>
+      <button id="sheet-delete" class="sheet-btn danger">🗑️ 이 기간 기록 삭제</button>
+      <button id="sheet-cancel" class="sheet-btn ghost">닫기</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script src="app.js"></script>
+</body>
+</html>
