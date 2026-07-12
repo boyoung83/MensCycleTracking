@@ -280,6 +280,8 @@ function localCatchUp() {
 
 // ---------- 구글 캘린더 연동 ----------
 let tokenClient = null;
+let accessToken = null;
+let tokenExpiresAt = 0;   // ms epoch
 const GCAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Seoul';
 
@@ -287,16 +289,27 @@ function gcalStatus(msg) { $('#gcal-status').textContent = msg; }
 function updateSyncBadge() {
   $('#sync-badge').classList.toggle('hidden', !state.settings.clientId);
 }
+function tokenValid() { return !!accessToken && Date.now() < tokenExpiresAt - 60000; }
 
-function getToken(clientId) {
+// interactive=true  → 필요하면 계정 선택/동의 창을 띄움 (연동 버튼 눌렀을 때만)
+// interactive=false → 조용히(팝업 없이) 토큰만 시도. 안 되면 실패로 처리하고 넘어감.
+function getToken(clientId, interactive) {
+  if (tokenValid()) return Promise.resolve(accessToken);
   return new Promise((resolve, reject) => {
     if (!window.google || !google.accounts?.oauth2) return reject(new Error('구글 라이브러리 로딩 안 됨'));
-    tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: clientId,
-      scope: GCAL_SCOPE,
-      callback: (resp) => { resp.error ? reject(new Error(resp.error)) : resolve(resp.access_token); },
-    });
-    tokenClient.requestAccessToken({ prompt: '' });
+    if (!tokenClient || tokenClient._cid !== clientId) {
+      tokenClient = google.accounts.oauth2.initTokenClient({ client_id: clientId, scope: GCAL_SCOPE, callback: () => {} });
+      tokenClient._cid = clientId;
+    }
+    tokenClient.callback = (resp) => {
+      if (resp.error) return reject(new Error(resp.error));
+      accessToken = resp.access_token;
+      tokenExpiresAt = Date.now() + ((resp.expires_in || 3600) * 1000);
+      resolve(accessToken);
+    };
+    tokenClient.error_callback = (err) => reject(new Error(err.type || 'no_token'));
+    try { tokenClient.requestAccessToken({ prompt: interactive ? '' : 'none' }); }
+    catch (e) { reject(e); }
   });
 }
 
@@ -323,21 +336,32 @@ function timedEvent(dateStr, summary, description) {
   };
 }
 
-async function syncCalendar() {
+// 연동 버튼 전용: 계정 선택/동의 창 허용
+async function connectAndSync() {
   const clientId = $('#s-client-id').value.trim() || state.settings.clientId;
   if (!clientId) { gcalStatus('클라이언트 ID를 먼저 입력하세요.'); return; }
   state.settings.clientId = clientId; save(); updateSyncBadge();
+  gcalStatus('구글 인증 중…');
+  await syncCalendar(true);
+}
+
+// interactive=false면 팝업 없이 조용히. 기록 저장 때마다 호출되어도 창이 안 뜸.
+async function syncCalendar(interactive) {
+  const clientId = state.settings.clientId || $('#s-client-id').value.trim();
+  if (!clientId) return;
 
   const st = computeStats();
-  if (!st.nextPredicted) { gcalStatus('예측할 기록이 없어요. 시작일을 먼저 기록하세요.'); return; }
+  if (!st.nextPredicted) { if (interactive) gcalStatus('예측할 기록이 없어요. 시작일을 먼저 기록하세요.'); return; }
 
-  gcalStatus('구글 인증 중…');
   let token;
-  try { token = await getToken(clientId); }
-  catch (e) { gcalStatus('인증 실패: ' + e.message); return; }
+  try { token = await getToken(clientId, !!interactive); }
+  catch (e) {
+    if (interactive) gcalStatus('인증 실패: ' + e.message);
+    return; // 조용한 동기화면 그냥 넘어감 (다음에 연동 버튼으로 갱신)
+  }
 
   try {
-    gcalStatus('기존 알림 정리 중…');
+    if (interactive) gcalStatus('기존 알림 정리 중…');
     const nowIso = new Date().toISOString();
     const list = await gapi(token, 'GET',
       `/calendars/primary/events?privateExtendedProperty=${encodeURIComponent('app=cycle-tracker')}&timeMin=${encodeURIComponent(nowIso)}&maxResults=50&singleEvents=true`);
@@ -365,17 +389,25 @@ async function syncCalendar() {
         created.push('오늘 확인');
       }
     }
-    gcalStatus(created.length ? `동기화 완료 · 알림 등록: ${created.join(', ')}` : '등록할 미래 알림이 없어요.');
-    toast('구글 캘린더 동기화 완료');
+    if (interactive) {
+      gcalStatus(created.length ? `동기화 완료 · 알림 등록: ${created.join(', ')}` : '등록할 미래 알림이 없어요.');
+      toast('구글 캘린더 동기화 완료');
+    } else if (created.length) {
+      gcalStatus(`캘린더 자동 갱신됨 · ${created.join(', ')}`);
+    }
   } catch (e) {
-    gcalStatus('동기화 오류: ' + e.message);
+    if (interactive) gcalStatus('동기화 오류: ' + e.message);
   }
 }
 
-// 기록이 바뀌면 자동 재동기화(연동돼 있을 때만, 조용히)
-async function autoSync() {
+// 기록이 바뀌면 자동 재동기화 — 유효 토큰이 있을 때만 조용히(팝업 없이).
+// 토큰이 없거나 만료됐으면 아무 창도 띄우지 않고 그냥 넘어감.
+let syncTimer = null;
+function scheduleAutoSync() {
   if (!state.settings.clientId || !window.google) return;
-  try { await syncCalendar(); } catch { /* silent */ }
+  if (!tokenValid()) return; // 팝업을 유발하지 않기 위해, 유효 토큰이 있을 때만
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { syncCalendar(false); }, 1500);
 }
 
 // ---------- 백업 ----------
@@ -432,13 +464,13 @@ function init() {
   $('#cal-next').onclick = () => { if (++viewMonth > 11) { viewMonth = 0; viewYear++; } renderCalendar(); };
 
   // 빠른 기록
-  $('#btn-log-today').onclick = async () => { setStart(todayStr()); renderAll(); await ensureNotifyPermission(); autoSync(); };
-  $('#btn-end-today').onclick = () => { setEnd(todayStr()); renderAll(); autoSync(); };
+  $('#btn-log-today').onclick = async () => { setStart(todayStr()); renderAll(); await ensureNotifyPermission(); scheduleAutoSync(); };
+  $('#btn-end-today').onclick = () => { setEnd(todayStr()); renderAll(); scheduleAutoSync(); };
 
   // 시트
-  $('#sheet-start').onclick = () => { if (sheetDate) { setStart(sheetDate); renderAll(); autoSync(); } closeSheet(); };
-  $('#sheet-end').onclick = () => { if (sheetDate) { setEnd(sheetDate); renderAll(); autoSync(); } closeSheet(); };
-  $('#sheet-delete').onclick = () => { if (sheetDate) { deleteAt(sheetDate); renderAll(); autoSync(); } closeSheet(); };
+  $('#sheet-start').onclick = () => { if (sheetDate) { setStart(sheetDate); renderAll(); scheduleAutoSync(); } closeSheet(); };
+  $('#sheet-end').onclick = () => { if (sheetDate) { setEnd(sheetDate); renderAll(); scheduleAutoSync(); } closeSheet(); };
+  $('#sheet-delete').onclick = () => { if (sheetDate) { deleteAt(sheetDate); renderAll(); scheduleAutoSync(); } closeSheet(); };
   $('#sheet-cancel').onclick = closeSheet;
   $('.sheet-bg').onclick = closeSheet;
 
@@ -458,9 +490,10 @@ function init() {
   };
 
   // 구글 캘린더
-  $('#btn-gcal-connect').onclick = () => syncCalendar();
+  $('#btn-gcal-connect').onclick = () => connectAndSync();
   $('#btn-gcal-off').onclick = () => {
-    state.settings.clientId = ''; $('#s-client-id').value = ''; save(); updateSyncBadge();
+    state.settings.clientId = ''; $('#s-client-id').value = '';
+    accessToken = null; tokenExpiresAt = 0; save(); updateSyncBadge();
     gcalStatus('연동을 해제했어요. (이미 등록된 캘린더 일정은 남아 있어요)');
   };
 
@@ -470,6 +503,12 @@ function init() {
   // 서비스워커
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
+  // 연동돼 있으면 앱 열 때 조용히(팝업 없이) 캘린더 갱신 시도.
+  // 구글 라이브러리 로딩을 잠깐 기다린 뒤 실행.
+  if (state.settings.clientId) {
+    setTimeout(() => { if (window.google) syncCalendar(false); }, 1500);
   }
 }
 
