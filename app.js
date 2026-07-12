@@ -500,9 +500,13 @@ function init() {
   // 알림 권한 + 따라잡기
   ensureNotifyPermission().then((ok) => { if (ok) localCatchUp(); });
 
-  // 서비스워커
+  // 서비스워커 — 새 버전이 활성화되면 자동으로 한 번 새로고침(캐시 최신화)
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return; reloaded = true; location.reload();
+    });
+    navigator.serviceWorker.register('sw.js').then((reg) => reg.update()).catch(() => {});
   }
 
   // 연동돼 있으면 앱 열 때 조용히(팝업 없이) 캘린더 갱신 시도.
