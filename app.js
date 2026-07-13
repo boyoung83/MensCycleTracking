@@ -15,7 +15,7 @@ function fmtKo(s) { const d = parseYMD(s); const w = ['일', '월', '화', '수'
 function fmtShort(s) { const d = parseYMD(s); return `${d.getMonth() + 1}.${d.getDate()}`; }
 
 // ---------- 상태 ----------
-const DEFAULTS = { defaultCycle: 28, window: 6, remindHour: 9, clientId: '' };
+const DEFAULTS = { defaultCycle: 28, window: 6, remindHour: 9, clientId: '', calLabel: '🌙 개인 일정' };
 let state = { periods: [], settings: { ...DEFAULTS } };
 let viewYear, viewMonth; // 달력에 보이는 달
 
@@ -267,12 +267,14 @@ function localCatchUp() {
   const done = JSON.parse(localStorage.getItem(flagKey) || '[]');
   const already = periodOf(today) || (st.lastStart && diffDays(st.lastStart, today) < st.cycleForPredict - 3);
 
+  // 잠금화면 등에 남에게 보일 수 있으므로 표시 이름을 그대로 사용(🩸·"생리" 노출 안 함)
+  const label = (state.settings.calLabel || DEFAULTS.calLabel).trim() || DEFAULTS.calLabel;
   if (dd === 2 && !done.includes('pre')) {
-    notify('🩸 생리 예정 2일 전', `${fmtKo(st.nextPredicted)} 예정이에요. 미리 준비하세요.`, 'pre');
+    notify(`${label} (2일 전)`, '', 'pre');
     done.push('pre');
   }
   if (dd <= 0 && !already && !done.includes('day')) {
-    notify('🩸 생리 예정일 확인', '오늘 예정일이에요. 시작했다면 기록해 주세요.', 'day');
+    notify(`${label} (확인)`, '', 'day');
     done.push('day');
   }
   localStorage.setItem(flagKey, JSON.stringify(done));
@@ -327,12 +329,14 @@ function timedEvent(dateStr, summary, description) {
   const h = pad(state.settings.remindHour);
   return {
     summary,
-    description,
+    description: description || '',
     start: { dateTime: `${dateStr}T${h}:00:00`, timeZone: TZ },
     end: { dateTime: `${dateStr}T${h}:30:00`, timeZone: TZ },
     reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 0 }] },
     extendedProperties: { private: { app: 'cycle-tracker' } },
-    colorId: '4',
+    visibility: 'private',      // 캘린더 공유 시 남에겐 '바쁨'으로만 보임
+    transparency: 'transparent',
+    colorId: '8',               // 그래파이트(회색) — 눈에 안 띔
   };
 }
 
@@ -340,7 +344,11 @@ function timedEvent(dateStr, summary, description) {
 async function connectAndSync() {
   const clientId = $('#s-client-id').value.trim() || state.settings.clientId;
   if (!clientId) { gcalStatus('클라이언트 ID를 먼저 입력하세요.'); return; }
-  state.settings.clientId = clientId; save(); updateSyncBadge();
+  state.settings.clientId = clientId;
+  const lbl = $('#s-cal-label').value.trim();
+  if (lbl) state.settings.calLabel = lbl;   // 저장 안 눌러도 반영
+  state.settings.remindHour = clampInt($('#s-remind-hour').value, 0, 23, state.settings.remindHour);
+  save(); updateSyncBadge();
   gcalStatus('구글 인증 중…');
   await syncCalendar(true);
 }
@@ -370,22 +378,23 @@ async function syncCalendar(interactive) {
     }
 
     const today = todayStr();
+    const label = (state.settings.calLabel || DEFAULTS.calLabel).trim() || DEFAULTS.calLabel;
     const created = [];
     const pre = addDays(st.nextPredicted, -2);
     if (pre > today) {
       await gapi(token, 'POST', '/calendars/primary/events',
-        timedEvent(pre, '🩸 생리 예정 2일 전', `예상 시작일: ${fmtKo(st.nextPredicted)}`));
+        timedEvent(pre, `${label} (2일 전)`, ''));
       created.push('2일 전');
     }
     if (st.nextPredicted >= today) {
       await gapi(token, 'POST', '/calendars/primary/events',
-        timedEvent(st.nextPredicted, '🩸 생리 예정일 — 시작했나요?', '시작했다면 앱에 기록해 주세요.'));
+        timedEvent(st.nextPredicted, `${label} (당일)`, ''));
       created.push('예정일 당일');
     } else {
       // 예정일이 이미 지났고 아직 기록 안 됨 → 오늘 확인 알림
       if (!periodOf(today)) {
         await gapi(token, 'POST', '/calendars/primary/events',
-          timedEvent(today, '🩸 생리 시작 확인', `예정일(${fmtShort(st.nextPredicted)})이 지났어요. 시작했다면 기록해 주세요.`));
+          timedEvent(today, `${label} (확인)`, ''));
         created.push('오늘 확인');
       }
     }
@@ -438,12 +447,14 @@ function importData(file) {
 function loadSettingsToForm() {
   $('#s-client-id').value = state.settings.clientId || '';
   $('#s-remind-hour').value = state.settings.remindHour;
+  $('#s-cal-label').value = state.settings.calLabel || '';
   $('#s-default-cycle').value = state.settings.defaultCycle;
   $('#s-window').value = state.settings.window;
   $('#s-origin').textContent = location.origin;
 }
 function saveSettings() {
   state.settings.remindHour = clampInt($('#s-remind-hour').value, 0, 23, 9);
+  state.settings.calLabel = $('#s-cal-label').value.trim() || DEFAULTS.calLabel;
   state.settings.defaultCycle = clampInt($('#s-default-cycle').value, 15, 60, 28);
   state.settings.window = clampInt($('#s-window').value, 2, 24, 6);
   state.settings.clientId = $('#s-client-id').value.trim();

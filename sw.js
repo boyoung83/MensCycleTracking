@@ -1,6 +1,6 @@
 // Service worker: 네트워크 우선(온라인이면 항상 최신), 오프라인이면 캐시 사용.
 // 캐시 버전을 올리면 기존 캐시를 정리하고 새로 받는다.
-const CACHE = 'cycle-tracker-v2';
+const CACHE = 'cycle-tracker-v3';
 const ASSETS = [
   './',
   './index.html',
